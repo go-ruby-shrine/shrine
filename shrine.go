@@ -17,8 +17,9 @@ import (
 // the location and MIME seams. It plays the role of the gem's Shrine class
 // (which holds `Shrine.storages` and the uploader behaviour).
 type Shrine struct {
-	storages map[string]Storage
-	plugins  []Plugin
+	storages   map[string]Storage
+	plugins    []Plugin
+	extractors []MetadataExtractor
 
 	// GenerateLocation produces the storage id for an upload from its metadata.
 	// The default is a random hex string plus the filename's extension. Replace
@@ -28,6 +29,11 @@ type Shrine struct {
 	// DetectMIME sniffs the mime type of the leading bytes of a file. The
 	// default is net/http.DetectContentType.
 	DetectMIME func(data []byte) string
+
+	// defaultCache and defaultStore are the storage names used by
+	// [Shrine.DefaultAttacher], set by the default_storage plugin.
+	defaultCache string
+	defaultStore string
 }
 
 // Plugin is the minimal plugin-registration seam. Configure is called with the
@@ -101,6 +107,13 @@ func (s *Shrine) UploadedFile(data string) (*UploadedFile, error) {
 	if err := json.Unmarshal([]byte(data), &raw); err != nil {
 		return nil, err
 	}
+	return s.hydrate(raw)
+}
+
+// hydrate binds a decoded [ufJSON] to this Shrine, returning a wrapped
+// [ErrUnknownStorage] if its storage name is not registered. It is the shared
+// core of [Shrine.UploadedFile] and the derivatives-aware column loader.
+func (s *Shrine) hydrate(raw ufJSON) (*UploadedFile, error) {
 	if _, ok := s.storages[raw.Storage]; !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownStorage, raw.Storage)
 	}

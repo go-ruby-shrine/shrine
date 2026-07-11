@@ -65,24 +65,28 @@ func (u *Uploader) Upload(r io.Reader, opts *UploadOptions) (*UploadedFile, erro
 // extractMetadata builds the metadata hash for data, honouring overrides in
 // opts. Mirrors `Shrine#extract_metadata`: filename (from the option),
 // size (byte length) and mime_type (content sniff) — always present, null when
-// unknown.
+// unknown — then the registered [MetadataExtractor]s (the add_metadata plugin),
+// each seeing the metadata accumulated so far. Explicit overrides in
+// opts.Metadata always win, matching the gem's `metadata:` option.
 func (u *Uploader) extractMetadata(data []byte, opts *UploadOptions) Metadata {
 	meta := Metadata{}
-	for k, v := range opts.Metadata {
-		meta[k] = v
+	// The three core keys are always present (null when unknown).
+	if opts.Filename != "" {
+		meta["filename"] = opts.Filename
+	} else {
+		meta["filename"] = nil
 	}
-	if _, ok := meta["filename"]; !ok {
-		if opts.Filename != "" {
-			meta["filename"] = opts.Filename
-		} else {
-			meta["filename"] = nil
+	meta["size"] = int64(len(data))
+	meta["mime_type"] = u.shrine.DetectMIME(data)
+	// Registered add_metadata extractors, in registration order.
+	for _, ex := range u.shrine.extractors {
+		for k, v := range ex(data, meta) {
+			meta[k] = v
 		}
 	}
-	if _, ok := meta["size"]; !ok {
-		meta["size"] = int64(len(data))
-	}
-	if _, ok := meta["mime_type"]; !ok {
-		meta["mime_type"] = u.shrine.DetectMIME(data)
+	// Explicit overrides win over everything extracted.
+	for k, v := range opts.Metadata {
+		meta[k] = v
 	}
 	return meta
 }

@@ -17,7 +17,24 @@ type Attacher struct {
 	file     *UploadedFile // the current attachment (may be nil)
 	original *UploadedFile // the last finalized attachment, for replacement
 	changed  bool
+
+	// Validate, when set, runs on every attachment change and returns the
+	// validation error messages, which are recorded in [Attacher.Errors].
+	// It is the seam the validation_helpers plugin plugs into (the gem's
+	// `Attacher.validate do … end` block); build the messages with a
+	// [Validation]. See [Attacher.Valid].
+	Validate func(file *UploadedFile) []string
+	// Errors holds the messages from the last [Attacher.Validate] run,
+	// mirroring `Attacher#errors`.
+	Errors []string
+
+	// derivatives holds the processed derived files (the derivatives plugin),
+	// keyed by name; nil until the first is added.
+	derivatives map[string]*UploadedFile
 }
+
+// shrine returns the [Shrine] this attacher's uploaders belong to.
+func (a *Attacher) shrine() *Shrine { return a.store.shrine }
 
 // Get returns the current attachment, or nil when nothing is attached. Mirrors
 // `Attacher#get`/`#file`.
@@ -27,11 +44,22 @@ func (a *Attacher) Get() *UploadedFile { return a.file }
 // mirroring `Attacher#changed?`.
 func (a *Attacher) Changed() bool { return a.changed }
 
-// change sets the current attachment and marks the attacher changed.
+// change sets the current attachment, marks the attacher changed and runs the
+// validation seam (if any) against the new file, recording its messages in
+// [Attacher.Errors]. Detaching (file == nil) clears the errors without
+// validating, matching the gem.
 func (a *Attacher) change(file *UploadedFile) {
 	a.file = file
 	a.changed = true
+	a.Errors = nil
+	if file != nil && a.Validate != nil {
+		a.Errors = a.Validate(file)
+	}
 }
+
+// Valid reports whether the last attachment change passed validation (no
+// recorded errors), mirroring `Attacher#valid?`.
+func (a *Attacher) Valid() bool { return len(a.Errors) == 0 }
 
 // Assign uploads r to the cache storage and sets it as the (changed) current
 // attachment, mirroring `Attacher#assign(io)` / `#attach_cached`.

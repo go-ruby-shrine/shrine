@@ -28,8 +28,11 @@ It is the attachment layer for
 > outside world are **host seams**, so tests stay hermetic: the filesystem
 > storage runs over an injectable **`FS`** seam (default `OSFS`; a fake drives
 > the I/O error branches), location generation is the **`GenerateLocation`**
-> seam, and MIME detection is the **`DetectMIME`** seam. The gem's large
-> **plugin set is out of scope**; only the `Plugin` registration seam lives here.
+> seam, and MIME detection is the **`DetectMIME`** seam. The plugins real apps
+> rely on are implemented here (see **[Plugins](#plugins)**); the parts that need
+> infrastructure the pure-Go core does not carry — storage backends beyond
+> Memory/FileSystem (S3, …), the ORM row, the remote-URL fetch — stay as
+> injectable seams.
 
 ## Features
 
@@ -56,13 +59,54 @@ Faithful port of the shrine attachment core:
   `nil` to detach).
 - **Seams** — `GenerateLocation func(Metadata) string`,
   `DetectMIME func([]byte) string`, and the filesystem `FS` interface.
-- **Plugins** — the minimal `Plugin` registration hook (`s.Plugin(p)`); the
-  broad plugin set is deferred.
+- **[Plugins](#plugins)** — the core plugin set real apps rely on, in pure Go.
 
 CGO-free, dependency-free (stdlib only), **100% test coverage**, `gofmt` +
 `go vet` clean, and green across the six 64-bit Go targets (amd64, arm64,
 riscv64, loong64, ppc64le, **s390x** — big-endian) plus `js/wasm` and
 `wasip1/wasm`.
+
+## Plugins
+
+The plugins real applications depend on are implemented here in **pure Go**, on
+top of the uploader/storage core. Class-level plugins register through the
+`Plugin` seam (`s.Plugin(&shrine.DetermineMIMEType{})`); attachment-level plugins
+are methods on `Attacher` / `UploadedFile`. Every behaviour is checked against
+the **shrine gem (v3.8)** and pinned with differential test oracles (signature
+digests, `data:` decoding, validation messages, `pretty_location` shape, …).
+
+| plugin | this package | notes |
+| --- | --- | --- |
+| `determine_mime_type` | `DetermineMIMEType` + `MIMEAnalyzer` (`ContentAnalyzer`, `ExtensionAnalyzerFor`) | content sniff via `net/http.DetectContentType` |
+| `store_dimensions` | `StoreDimensions` + `DimensionAnalyzer` (`ImageDimensions`); `f.Width()`/`.Height()`/`.Dimensions()` | pure-Go `image.DecodeConfig` (png/jpeg/gif) |
+| `add_metadata` | `s.AddMetadata` / `s.AddMetadataKey`; `Metadata.String`/`.Int` | foundation for the metadata plugins |
+| `signature` | `Signature(...)` + `SignatureMetadata` | md5/sha1/sha256/sha384/sha512/crc32 × hex/base64/none |
+| `refresh_metadata` | `f.RefreshMetadata()` | recompute metadata from stored bytes |
+| `validation_helpers` | `Validation` + `att.Validate` / `att.Valid()` | gem-identical messages; ext case-insensitive, mime case-sensitive |
+| `pretty_location` | `s.PrettyLocation(LocationContext{...})` | `namespace/id/name/basename.ext` |
+| `derivatives` | `att.CreateDerivatives` / `AddDerivative` / `Derivative[URL]` / `DeleteDerivatives` | serialised under the column's `"derivatives"` key |
+| `cached_attachment_data` | `att.CachedData()` / `att.SetCached()` | hidden-field round-trip |
+| `restore_cached_data` | `att.RestoreCachedData()` | re-extracts metadata from bytes (anti-tamper) |
+| `data_uri` | `DataURI(uri)` / `att.AssignDataURI()` | RFC 2397 parsing (base64 + form-unescape) |
+| `remote_url` | `RemoteURL{Download, MaxSize}` + `HTTPDownloader` | download via the `Downloader` seam |
+| `upload_endpoint` | `UploadEndpoint` (`http.Handler`) | multipart → cache, JSON response |
+| `presign_endpoint` | `PresignEndpoint` over the `Presigner` seam | direct-upload descriptor |
+| `default_storage` | `DefaultStorage` + `s.DefaultAttacher()` / `s.DefaultUploader()` | |
+| `activerecord` / `sequel` | `ModelAttacher` (`s.NewActiveRecord` / `s.NewSequel`) over the `Record` seam | callback wiring is host-side |
+| `column`/`entity`/`model` serialization | `att.ColumnData()` / `att.LoadColumn()` | derivatives-aware column data |
+
+**Left as injectable seams** (need infrastructure the pure-Go core does not
+carry): storage backends beyond Memory/FileSystem — **S3, GCS, …** — are any
+`Storage` (and `Presigner`) implementation; the ORM row is the `Record` seam;
+the remote-URL fetch is the `Downloader` seam; the mime/dimension analyzers are
+the `MIMEAnalyzer` / `DimensionAnalyzer` seams. Beyond that, the interpreter-only
+plugins (e.g. `backgrounding`, `rack_response`, `mirroring`, `infer_extension`)
+remain for the rbgo binding.
+
+> **MIME divergence.** `net/http.DetectContentType` appends a charset to text
+> (`text/plain; charset=utf-8`) and never returns nil, where the gem's default
+> `:file` analyzer returns a bare type or nil for empty/unknown content. The
+> recognised binary signatures (PNG/JPEG/GIF/PDF/ZIP/…) agree with the gem.
 
 ## Install
 

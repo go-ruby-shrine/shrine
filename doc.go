@@ -56,8 +56,51 @@
 //
 // # Plugins
 //
-// The gem's plugin system is a large surface that mostly needs the interpreter;
-// only the registration seam lives here. Register a [Plugin] with
-// [Shrine.Plugin]; its Configure hook receives the Shrine instance. The wider
-// plugin set is deferred to the rbgo binding.
+// The plugins real applications depend on are implemented here as pure Go. The
+// class-level ones register through the [Plugin] seam ([Shrine.Plugin], whose
+// Configure hook receives the Shrine); the attachment-level ones are methods on
+// [Attacher]/[UploadedFile]. Behaviour is matched against the shrine gem (v3.8)
+// and pinned with differential test oracles.
+//
+//   - determine_mime_type — content-sniffed mime via a [MIMEAnalyzer] seam
+//     ([DetermineMIMEType]; default [ContentAnalyzer] over net/http, plus
+//     [ExtensionAnalyzerFor]).
+//   - store_dimensions — image width/height via a [DimensionAnalyzer]
+//     ([StoreDimensions]; default [ImageDimensions] over the stdlib image
+//     decoders), read with [UploadedFile.Width]/[UploadedFile.Height]/
+//     [UploadedFile.Dimensions].
+//   - add_metadata — pluggable [MetadataExtractor]s ([Shrine.AddMetadata]/
+//     [Shrine.AddMetadataKey]); the foundation store_dimensions, signature and
+//     refresh_metadata build on.
+//   - signature — md5/sha1/sha256/sha384/sha512/crc32 digests in hex/base64/raw
+//     ([Signature]), and [SignatureMetadata] to store one per upload.
+//   - refresh_metadata — recompute metadata from the stored bytes
+//     ([UploadedFile.RefreshMetadata]).
+//   - validation_helpers — size/extension/mime/dimension checks with the gem's
+//     messages ([Validation]), wired through [Attacher.Validate].
+//   - pretty_location — human-readable locations ([Shrine.PrettyLocation]).
+//   - derivatives — process/store derived files ([Attacher.CreateDerivatives],
+//     [Attacher.AddDerivative], …), serialised in the column data.
+//   - cached_attachment_data / restore_cached_data — [Attacher.CachedData],
+//     [Attacher.SetCached], [Attacher.RestoreCachedData].
+//   - data_uri — parse and attach "data:" URIs ([DataURI],
+//     [Attacher.AssignDataURI]).
+//   - remote_url — download and attach a URL through a [Downloader] seam
+//     ([RemoteURL]).
+//   - upload_endpoint / presign_endpoint — [http.Handler]s ([UploadEndpoint],
+//     [PresignEndpoint] over the [Presigner] seam).
+//   - default_storage — default cache/store ([DefaultStorage],
+//     [Shrine.DefaultAttacher]).
+//   - activerecord / sequel — model attachment over the [Record] seam
+//     ([ModelAttacher], [Shrine.NewActiveRecord]/[Shrine.NewSequel]); the
+//     save/destroy callback wiring is host-side.
+//
+// # Seams left to the host
+//
+// The parts that need infrastructure the pure-Go core does not carry stay
+// injectable: storage backends beyond Memory/FileSystem (S3, GCS, …) are any
+// [Storage] (and [Presigner]) implementation; the ORM row is the [Record] seam;
+// the remote-url fetch is the [Downloader] seam; the mime and dimension
+// analyzers are the [MIMEAnalyzer]/[DimensionAnalyzer] seams. Every test drives
+// these through in-memory fakes, so the suite touches no network or disk.
 package shrine
